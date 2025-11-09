@@ -15,4 +15,10 @@ dependencies = [
 [project.scripts]
 openproj-mcp = "openproject_mcp.main:run"
 
+[tool.ruff]
+exclude = [
+  "openproject-mcp.py",
+  "openprojvenv",
+  "__pycache__"
+]
 
