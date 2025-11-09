@@ -1,5 +1,6 @@
 from mcp.server.fastmcp import FastMCP
 
+
 def build_server() -> FastMCP:
     server = FastMCP("openproject")
 
