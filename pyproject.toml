@@ -12,6 +12,16 @@ dependencies = [
   "httpx>=0.27.0"
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0.0",
+  "pytest-asyncio>=0.21.0",
+  "coverage>=7.0.0",
+  "ruff>=0.6.9",
+  "black>=24.8.0",
+  "mypy>=1.11.0",
+]
+
 [project.scripts]
 openproj-mcp = "openproject_mcp.main:run"
 
@@ -21,4 +31,11 @@ exclude = [
   "openprojvenv",
   "__pycache__"
 ]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q"
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
 
