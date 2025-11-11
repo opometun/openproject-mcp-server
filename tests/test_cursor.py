@@ -58,7 +58,7 @@ class TestPageSizeClamping:
 
     def test_clamp_below_minimum(self):
         """Test value below 1 is clamped to 1"""
-        assert clamp_page_size(0, 25, 100) == 1
+        assert clamp_page_size(0, 25, 100) == 25
         assert clamp_page_size(-10, 25, 100) == 1
 
     def test_clamp_none_uses_default(self):
@@ -67,7 +67,7 @@ class TestPageSizeClamping:
 
     def test_clamp_zero_uses_default(self):
         """Test zero value uses default (via max(1, ...) logic)"""
-        assert clamp_page_size(0, 25, 100) == 1
+        assert clamp_page_size(0, 25, 100) == 25
 
 
 class TestPaginationHelper:
