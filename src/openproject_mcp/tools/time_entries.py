@@ -1,6 +1,12 @@
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
+import httpx
+from datetime import date
+
+from openproject_mcp.config import Settings
+from openproject_mcp.client import OpenProjectClient
+from openproject_mcp.errors import map_http_error
 
 # ============================================================================
 # Input Models (Request Parameters)
@@ -107,8 +113,10 @@ class LogTimeResponse(BaseModel):
 # ============================================================================
 
 
-def register(server: FastMCP):
+def register(server: FastMCP, settings: Settings | None = None):
     """Register all time entry tools with the MCP server"""
+    settings = settings or Settings()
+    client = OpenProjectClient(settings)
 
     @server.tool(
         "list_time_entries",
@@ -135,21 +143,63 @@ def register(server: FastMCP):
             Falls back to legacy 'work_package' filter for older API versions.
             Date filters use operators: >=d (from), <=d (to), <>d (range).
         """
-        return {
-            "error": {
-                "code": "NotImplemented",
-                "message": "list_time_entries not implemented yet",
-                "details": {
-                    "project_id": params.project_id,
-                    "wp_id": params.wp_id,
-                    "user_id": params.user_id,
-                    "from_date": params.from_date,
-                    "to_date": params.to_date,
-                    "page_size": params.page_size,
-                    "offset": params.offset,
-                },
+        try:
+            filters = []
+
+            # Project filter
+            if params.project_id:
+                filters.append(
+                    {"project": {"operator": "=", "values": [str(params.project_id)]}}
+                )
+
+            # Work package filter
+            if params.wp_id:
+                filters.append(
+                    {"work_package": {"operator": "=", "values": [str(params.wp_id)]}}
+                )
+
+            # User filter
+            if params.user_id:
+                filters.append(
+                    {"user": {"operator": "=", "values": [str(params.user_id)]}}
+                )
+
+            # Date range filters
+            if params.from_date and params.to_date:
+                # Date range filter
+                filters.append(
+                    {
+                        "spent_on": {
+                            "operator": "<>d",
+                            "values": [params.from_date, params.to_date],
+                        }
+                    }
+                )
+            elif params.from_date:
+                # From date only
+                filters.append(
+                    {"spent_on": {"operator": ">=d", "values": [params.from_date]}}
+                )
+            elif params.to_date:
+                # To date only
+                filters.append(
+                    {"spent_on": {"operator": "<=d", "values": [params.to_date]}}
+                )
+
+            # Build query parameters
+            query_params = {
+                "pageSize": params.page_size,
+                "offset": params.offset,
             }
-        }
+
+            if filters:
+                query_params["filters"] = str(filters)
+
+            res = await client.get("/time_entries", params=query_params)
+            return res.json()
+
+        except httpx.HTTPStatusError as e:
+            map_http_error(e.response.status_code, e.response.text[:300])
 
     @server.tool("log_time", description="Log time on a work package")
     async def log_time(params: LogTimeIn) -> dict:
@@ -182,19 +232,46 @@ def register(server: FastMCP):
                 "spent_on": "2025-11-11"
             }
         """
-        return {
-            "error": {
-                "code": "NotImplemented",
-                "message": "log_time not implemented yet",
-                "details": {
-                    "wp_id": params.wp_id,
-                    "hours": params.hours,
-                    "activity_id": params.activity_id,
-                    "comment": params.comment,
-                    "spent_on": params.spent_on,
-                    "user_id": params.user_id,
-                    "start_time": params.start_time,
-                    "end_time": params.end_time,
+        try:
+            # Convert decimal hours to ISO 8601 duration format
+            total_minutes = int(params.hours * 60)
+            hours_part = total_minutes // 60
+            minutes_part = total_minutes % 60
+
+            duration = f"PT{hours_part}H{minutes_part}M"
+
+            # Build payload
+            payload = {
+                "_links": {
+                    "workPackage": {"href": f"/api/v3/work_packages/{params.wp_id}"},
+                    "activity": {
+                        "href": f"/api/v3/time_entries/activities/{params.activity_id}"
+                    },
                 },
+                "hours": duration,
             }
-        }
+
+            # Add optional fields
+            if params.spent_on:
+                payload["spentOn"] = params.spent_on
+            else:
+                # Default to today
+                payload["spentOn"] = date.today().isoformat()
+
+            if params.comment:
+                payload["comment"] = {"raw": params.comment}
+
+            if params.user_id:
+                payload["_links"]["user"] = {"href": f"/api/v3/users/{params.user_id}"}
+
+            if params.start_time:
+                payload["startTime"] = params.start_time
+
+            if params.end_time:
+                payload["endTime"] = params.end_time
+
+            res = await client.post("/time_entries", json=payload)
+            return res.json()
+
+        except httpx.HTTPStatusError as e:
+            map_http_error(e.response.status_code, e.response.text[:300])
