@@ -78,7 +78,7 @@ class WikiAttachmentCollection(BaseModel):
 def register(server: FastMCP):
     """Register all wiki tools with the MCP server"""
 
-    @server.tool(description="Get wiki page details by page ID")
+    @server.tool("get_wiki_page", description="Get wiki page details by page ID")
     async def get_wiki_page(params: GetWikiPageIn) -> dict:
         """
         Retrieve detailed information about a wiki page.
@@ -106,7 +106,7 @@ def register(server: FastMCP):
             }
         }
 
-    @server.tool(description="Attach a file to a wiki page")
+    @server.tool("attach_file_to_wiki", description="Attach a file to a wiki page")
     async def attach_file_to_wiki(params: AttachFileToWikiIn) -> dict:
         """
         Upload and attach a local file to a wiki page.
@@ -143,7 +143,9 @@ def register(server: FastMCP):
             }
         }
 
-    @server.tool(description="List all attachments for a wiki page")
+    @server.tool(
+        "list_wiki_page_attachments", description="List all attachments for a wiki page"
+    )
     async def list_wiki_page_attachments(params: ListWikiPageAttachmentsIn) -> dict:
         """
         Retrieve all attachments associated with a wiki page.

@@ -85,41 +85,17 @@ def _sanitize_message(msg: str, max_length: int = 300) -> str:
     return msg
 
 
-def map_http_error(status: int, body: str):
-    """
-    Map HTTP status codes to appropriate exception types.
-
-    ACCEPTANCE CHECKS:
-    - 422 returns readable error message
-    - Messages are short and human-friendly (< 400 chars)
-    - No secrets exposed in error text
-
-    Args:
-        status: HTTP status code
-        body: Response body text (will be sanitized and truncated)
-
-    Raises:
-        Appropriate OpError subclass based on status code
-    """
-    # Sanitize the body to prevent secret leakage and ensure reasonable length
-    safe_body = _sanitize_message(body, max_length=300)
-
-    # Map status codes to exceptions with human-friendly messages
-    if status == 401:
-        raise AuthError(f"Authentication failed: {safe_body}")
-
-    elif status == 403:
-        raise PermissionError(f"Permission denied: {safe_body}")
-
-    elif status == 404:
-        raise NotFound(f"Resource not found: {safe_body}")
-
-    elif status == 422:
-        # Validation errors - extract helpful details
-        raise ValidationError(f"Validation failed: {safe_body}")
-
-    elif status == 429:
-        raise RateLimited(f"Rate limit exceeded: {safe_body}")
-
-    elif status in (500, 502, 503, 504):
-        raise ServerError(f"Server error ({status}): {safe_body}")
+def map_http_error(status_code: int, message: str = "") -> None:
+    """Map HTTP status codes to custom exceptions."""
+    if status_code == 401:
+        raise AuthError("Authentication failed")
+    elif status_code == 403:
+        raise PermissionError("Permission denied")
+    elif status_code == 404:
+        raise NotFound("Resource not found")
+    elif status_code == 409:
+        raise ValidationError(f"Edit conflict: {message}")
+    elif status_code == 422:
+        raise ValidationError("Validation failed")
+    else:
+        raise Exception(f"HTTP {status_code}: {message}")

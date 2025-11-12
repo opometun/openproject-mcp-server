@@ -64,7 +64,9 @@ class UserCollection(BaseModel):
 def register(server: FastMCP):
     """Register all user tools with the MCP server"""
 
-    @server.tool(description="Search for users by name (resolve user identity)")
+    @server.tool(
+        "resolve_user", description="Search for users by name (resolve user identity)"
+    )
     async def resolve_user(params: ResolveUserIn) -> dict:
         """
         Search for active users matching a search term.
@@ -93,7 +95,7 @@ def register(server: FastMCP):
             }
         }
 
-    @server.tool(description="Get a single user by their ID")
+    @server.tool("get_user_by_id", description="Get a single user by their ID")
     async def get_user_by_id(params: GetUserByIdIn) -> dict:
         """
         Retrieve detailed information about a specific user.
