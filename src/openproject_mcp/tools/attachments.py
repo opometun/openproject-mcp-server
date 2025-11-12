@@ -93,7 +93,7 @@ class AttachmentCollection(BaseModel):
 def register(server: FastMCP):
     """Register all attachment tools with the MCP server"""
 
-    @server.tool(description="Attach a file to a work package")
+    @server.tool("attach_file_to_wp", description="Attach a file to a work package")
     async def attach_file_to_wp(params: AttachFileToWpIn) -> dict:
         """
         Upload and attach a local file to a work package.
@@ -120,7 +120,9 @@ def register(server: FastMCP):
             }
         }
 
-    @server.tool(description="List all attachments for a work package")
+    @server.tool(
+        "list_attachments", description="List all attachments for a work package"
+    )
     async def list_attachments(params: ListAttachmentsIn) -> dict:
         """
         Retrieve all attachments associated with a work package.
@@ -139,7 +141,9 @@ def register(server: FastMCP):
             }
         }
 
-    @server.tool(description="Download attachment binary content")
+    @server.tool(
+        "download_attachment", description="Download attachment binary content"
+    )
     async def download_attachment(params: DownloadAttachmentIn) -> dict:
         """
         Download the raw binary content of an attachment.
@@ -165,7 +169,10 @@ def register(server: FastMCP):
             }
         }
 
-    @server.tool(description="Get attachment metadata and content preview")
+    @server.tool(
+        "get_attachment_content",
+        description="Get attachment metadata and content preview",
+    )
     async def get_attachment_content(params: GetAttachmentContentIn) -> dict:
         """
         Retrieve attachment metadata plus a preview of the content.

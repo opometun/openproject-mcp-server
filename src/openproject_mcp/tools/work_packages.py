@@ -143,7 +143,8 @@ def register(server: FastMCP, settings: Settings | None = None):
             map_http_error(e.response.status_code, e.response.text[:300])
 
     @server.tool(
-        description="Search OpenProject content (work packages, projects, attachments)"
+        "search_content",
+        description="Search OpenProject content (work packages, projects, attachments)",
     )
     async def search_content(params: SearchContentIn) -> dict:
         """
@@ -162,7 +163,10 @@ def register(server: FastMCP, settings: Settings | None = None):
             }
         }
 
-    @server.tool(description="Append markdown text to a work package description")
+    @server.tool(
+        "append_work_package_description",
+        description="Append markdown text to a work package description",
+    )
     async def append_work_package_description(
         params: AppendWorkPackageDescriptionIn,
     ) -> dict:
@@ -182,7 +186,10 @@ def register(server: FastMCP, settings: Settings | None = None):
             }
         }
 
-    @server.tool(description="Get all available work package statuses")
+    @server.tool(
+        "get_work_package_statuses",
+        description="Get all available work package statuses",
+    )
     async def get_work_package_statuses() -> dict:
         """
         Retrieve all available work package statuses.
@@ -200,7 +207,8 @@ def register(server: FastMCP, settings: Settings | None = None):
         }
 
     @server.tool(
-        description="Get available work package types, optionally filtered by project"
+        "get_work_package_types",
+        description="Get available work package types, optionally filtered by project",
     )
     async def get_work_package_types(params: GetWorkPackageTypesIn) -> dict:
         """
@@ -219,7 +227,9 @@ def register(server: FastMCP, settings: Settings | None = None):
             }
         }
 
-    @server.tool(description="Resolve a status name to status ID and details")
+    @server.tool(
+        "resolve_status", description="Resolve a status name to status ID and details"
+    )
     async def resolve_status(params: ResolveStatusIn) -> dict:
         """
         Map a status name to status_id with disambiguation support.
@@ -237,7 +247,10 @@ def register(server: FastMCP, settings: Settings | None = None):
             }
         }
 
-    @server.tool(description="Resolve a type name to type ID within project context")
+    @server.tool(
+        "resolve_type",
+        description="Resolve a type name to type ID within project context",
+    )
     async def resolve_type(params: ResolveTypeIn) -> dict:
         """
         Map a type name to type_id, respecting project-specific availability.

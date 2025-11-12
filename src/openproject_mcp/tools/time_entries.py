@@ -111,7 +111,8 @@ def register(server: FastMCP):
     """Register all time entry tools with the MCP server"""
 
     @server.tool(
-        description="List time entries with optional filtering by project, work package, user, and date range"
+        "list_time_entries",
+        description="List time entries with optional filtering by project, work package, user, and date range",
     )
     async def list_time_entries(params: ListTimeEntriesIn) -> dict:
         """
@@ -150,7 +151,7 @@ def register(server: FastMCP):
             }
         }
 
-    @server.tool(description="Log time on a work package")
+    @server.tool("log_time", description="Log time on a work package")
     async def log_time(params: LogTimeIn) -> dict:
         """
         Create a time entry on a work package.

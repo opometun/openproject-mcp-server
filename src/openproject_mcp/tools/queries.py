@@ -72,7 +72,10 @@ class QueryResultsResponse(BaseModel):
 def register(server: FastMCP):
     """Register all query tools with the MCP server"""
 
-    @server.tool(description="List saved queries (views) with optional project filter")
+    @server.tool(
+        "list_queries",
+        description="List saved queries (views) with optional project filter",
+    )
     async def list_queries(params: ListQueriesIn) -> dict:
         """
         Retrieve all saved queries, optionally filtered by project.
@@ -95,7 +98,10 @@ def register(server: FastMCP):
             }
         }
 
-    @server.tool(description="Execute a saved query and return matching work packages")
+    @server.tool(
+        "run_query",
+        description="Execute a saved query and return matching work packages",
+    )
     async def run_query(params: RunQueryIn) -> dict:
         """
         Execute a saved query to retrieve matching work packages.

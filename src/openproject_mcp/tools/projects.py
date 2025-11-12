@@ -77,7 +77,10 @@ class ProjectResolution(BaseModel):
 def register(server: FastMCP):
     """Register all project tools with the MCP server"""
 
-    @server.tool(description="Get memberships (users and roles) for a project")
+    @server.tool(
+        "get_project_memberships",
+        description="Get memberships (users and roles) for a project",
+    )
     async def get_project_memberships(params: GetProjectMembershipsIn) -> dict:
         """
         Retrieve all memberships associated with a project.
@@ -112,7 +115,9 @@ def register(server: FastMCP):
             }
         }
 
-    @server.tool(description="Look up a project by identifier or display name")
+    @server.tool(
+        "resolve_project", description="Look up a project by identifier or display name"
+    )
     async def resolve_project(params: ResolveProjectIn) -> dict:
         """
         Search for a project by its identifier or name.
