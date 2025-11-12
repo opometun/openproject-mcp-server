@@ -1,6 +1,11 @@
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
+import httpx
+
+from openproject_mcp.config import Settings
+from openproject_mcp.client import OpenProjectClient
+from openproject_mcp.errors import map_http_error
 
 # ============================================================================
 # Input Models (Request Parameters)
@@ -69,8 +74,10 @@ class QueryResultsResponse(BaseModel):
 # ============================================================================
 
 
-def register(server: FastMCP):
+def register(server: FastMCP, settings: Settings | None = None):
     """Register all query tools with the MCP server"""
+    settings = settings or Settings()
+    client = OpenProjectClient(settings)
 
     @server.tool(
         "list_queries",
@@ -90,13 +97,16 @@ def register(server: FastMCP):
             Queries represent saved views/filters in OpenProject.
             They can be project-specific or global.
         """
-        return {
-            "error": {
-                "code": "NotImplemented",
-                "message": "list_queries not implemented yet",
-                "details": {"project_id": params.project_id},
-            }
-        }
+        try:
+            if params.project_id:
+                # Get project-specific queries
+                res = await client.get(f"/projects/{params.project_id}/queries")
+            else:
+                # Get all queries
+                res = await client.get("/queries")
+            return res.json()
+        except httpx.HTTPStatusError as e:
+            map_http_error(e.response.status_code, e.response.text[:300])
 
     @server.tool(
         "run_query",
@@ -122,10 +132,49 @@ def register(server: FastMCP):
                 "assignee": {"operator": "=", "values": ["123"]}
             }
         """
-        return {
-            "error": {
-                "code": "NotImplemented",
-                "message": "run_query not implemented yet",
-                "details": {"query_id": params.query_id, "overrides": params.overrides},
+        try:
+            # First, get the query to retrieve its configuration
+            query_res = await client.get(f"/queries/{params.query_id}")
+            query_data = query_res.json()
+
+            # Build the payload for executing the query
+            payload = {
+                "filters": query_data.get("filters", []),
+                "sortBy": query_data.get("sortBy", []),
+                "groupBy": query_data.get("groupBy"),
+                "columns": query_data.get("columns", []),
             }
-        }
+
+            # Apply overrides if provided
+            if params.overrides:
+                # Merge overrides into filters
+                existing_filters = {f.get("id"): f for f in payload["filters"]}
+
+                for filter_id, filter_config in params.overrides.items():
+                    if isinstance(filter_config, dict) and "operator" in filter_config:
+                        # Override or add new filter
+                        existing_filters[filter_id] = {
+                            "id": filter_id,
+                            "operator": filter_config["operator"],
+                            "values": filter_config.get("values", []),
+                        }
+
+                payload["filters"] = list(existing_filters.values())
+
+            # Execute the query by posting to the query results endpoint
+            # Use the _links.results href if available, otherwise construct it
+            results_href = query_data.get("_links", {}).get("results", {}).get("href")
+
+            if results_href:
+                # Strip /api/v3 prefix if present since client adds it
+                if results_href.startswith("/api/v3"):
+                    results_href = results_href[7:]  # Remove "/api/v3"
+                res = await client.get(results_href)
+            else:
+                # Fall back to posting the query configuration
+                res = await client.post("/queries/default", json=payload)
+
+            return res.json()
+
+        except httpx.HTTPStatusError as e:
+            map_http_error(e.response.status_code, e.response.text[:300])
