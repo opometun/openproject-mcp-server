@@ -1,6 +1,11 @@
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 from typing import Optional, Dict
+import httpx
+
+from openproject_mcp.config import Settings
+from openproject_mcp.client import OpenProjectClient
+from openproject_mcp.errors import map_http_error
 
 # ============================================================================
 # Input Models (Request Parameters)
@@ -61,8 +66,10 @@ class UserCollection(BaseModel):
 # ============================================================================
 
 
-def register(server: FastMCP):
+def register(server: FastMCP, settings: Settings | None = None):
     """Register all user tools with the MCP server"""
+    settings = settings or Settings()
+    client = OpenProjectClient(settings)
 
     @server.tool(
         "resolve_user", description="Search for users by name (resolve user identity)"
@@ -87,13 +94,34 @@ def register(server: FastMCP):
             - Falls back to select=* if server doesn't support field selection
             - v3 API may not return 'login' field
         """
-        return {
-            "error": {
-                "code": "NotImplemented",
-                "message": "resolve_user not implemented yet",
-                "details": {"search_term": params.search_term, "limit": params.limit},
+        try:
+            # Build filters for user search
+            filters = [
+                {"type": {"operator": "=", "values": ["User"]}},
+                {
+                    "status": {
+                        "operator": "=",
+                        "values": ["1"],  # Active users only
+                    }
+                },
+                {
+                    "any_name_attribute": {
+                        "operator": "~",
+                        "values": [params.search_term],
+                    }
+                },
+            ]
+
+            query_params = {
+                "filters": str(filters),
+                "pageSize": params.limit,
             }
-        }
+
+            res = await client.get("/principals", params=query_params)
+            return res.json()
+
+        except httpx.HTTPStatusError as e:
+            map_http_error(e.response.status_code, e.response.text[:300])
 
     @server.tool("get_user_by_id", description="Get a single user by their ID")
     async def get_user_by_id(params: GetUserByIdIn) -> dict:
@@ -113,10 +141,8 @@ def register(server: FastMCP):
             Returns complete user information including email, status,
             creation date, and links to related resources.
         """
-        return {
-            "error": {
-                "code": "NotImplemented",
-                "message": "get_user_by_id not implemented yet",
-                "details": {"user_id": params.user_id},
-            }
-        }
+        try:
+            res = await client.get(f"/users/{params.user_id}")
+            return res.json()
+        except httpx.HTTPStatusError as e:
+            map_http_error(e.response.status_code, e.response.text[:300])

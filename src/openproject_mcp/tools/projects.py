@@ -1,6 +1,11 @@
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
+import httpx
+
+from openproject_mcp.config import Settings
+from openproject_mcp.client import OpenProjectClient
+from openproject_mcp.errors import map_http_error
 
 # ============================================================================
 # Input Models (Request Parameters)
@@ -74,8 +79,10 @@ class ProjectResolution(BaseModel):
 # ============================================================================
 
 
-def register(server: FastMCP):
+def register(server: FastMCP, settings: Settings | None = None):
     """Register all project tools with the MCP server"""
+    settings = settings or Settings()
+    client = OpenProjectClient(settings)
 
     @server.tool(
         "get_project_memberships",
@@ -101,19 +108,72 @@ def register(server: FastMCP):
               across pages up to the specified limit
             - Each membership includes links to user, project, and roles
         """
-        return {
-            "error": {
-                "code": "NotImplemented",
-                "message": "get_project_memberships not implemented yet",
-                "details": {
-                    "project_id": params.project_id,
-                    "filters": params.filters,
-                    "page_size": params.page_size,
-                    "offset": params.offset,
-                    "follow": params.follow,
-                },
+        try:
+            # Build filters
+            filters = [
+                {"project": {"operator": "=", "values": [str(params.project_id)]}}
+            ]
+
+            # Add any additional filters
+            if params.filters:
+                for filter_id, filter_config in params.filters.items():
+                    if isinstance(filter_config, dict) and "operator" in filter_config:
+                        filters.append(
+                            {
+                                filter_id: {
+                                    "operator": filter_config["operator"],
+                                    "values": filter_config.get("values", []),
+                                }
+                            }
+                        )
+
+            # Build query parameters
+            query_params = {
+                "pageSize": params.page_size,
+                "offset": params.offset,
+                "filters": str(filters),
             }
-        }
+
+            # If follow parameter is provided, collect across pages
+            if params.follow:
+                all_elements = []
+                current_offset = params.offset
+
+                while len(all_elements) < params.follow:
+                    query_params["offset"] = current_offset
+                    res = await client.get("/memberships", params=query_params)
+                    data = res.json()
+
+                    elements = data.get("_embedded", {}).get("elements", [])
+                    if not elements:
+                        break
+
+                    all_elements.extend(elements)
+
+                    # Check if we have more pages
+                    if len(all_elements) >= data.get("total", 0):
+                        break
+
+                    current_offset += 1
+
+                # Trim to follow limit
+                all_elements = all_elements[: params.follow]
+
+                return {
+                    "_type": "Collection",
+                    "count": len(all_elements),
+                    "total": len(all_elements),
+                    "pageSize": params.page_size,
+                    "offset": params.offset,
+                    "_embedded": {"elements": all_elements},
+                }
+            else:
+                # Single page request
+                res = await client.get("/memberships", params=query_params)
+                return res.json()
+
+        except httpx.HTTPStatusError as e:
+            map_http_error(e.response.status_code, e.response.text[:300])
 
     @server.tool(
         "resolve_project", description="Look up a project by identifier or display name"
@@ -158,10 +218,100 @@ def register(server: FastMCP):
                 ]
             }
         """
-        return {
-            "error": {
-                "code": "NotImplemented",
-                "message": "resolve_project not implemented yet",
-                "details": {"name_or_identifier": params.name_or_identifier},
-            }
-        }
+        try:
+            # Get all projects
+            res = await client.get("/projects", params={"pageSize": 1000})
+            projects_data = res.json()
+            projects = projects_data.get("_embedded", {}).get("elements", [])
+
+            # Normalize search term
+            search_term = params.name_or_identifier.lower().strip()
+
+            # First, try exact match on identifier
+            exact_identifier_matches = [
+                p for p in projects if p.get("identifier", "").lower() == search_term
+            ]
+
+            if len(exact_identifier_matches) == 1:
+                project = exact_identifier_matches[0]
+                return {
+                    "id": project.get("id"),
+                    "identifier": project.get("identifier"),
+                    "name": project.get("name"),
+                    "href": project.get("_links", {}).get("self", {}).get("href"),
+                }
+
+            if len(exact_identifier_matches) > 1:
+                return {
+                    "disambiguation_needed": True,
+                    "matches": [
+                        {
+                            "id": p.get("id"),
+                            "identifier": p.get("identifier"),
+                            "name": p.get("name"),
+                            "href": p.get("_links", {}).get("self", {}).get("href"),
+                        }
+                        for p in exact_identifier_matches
+                    ],
+                }
+
+            # Try partial match on name
+            name_matches = [
+                p for p in projects if search_term in p.get("name", "").lower()
+            ]
+
+            if len(name_matches) == 1:
+                project = name_matches[0]
+                return {
+                    "id": project.get("id"),
+                    "identifier": project.get("identifier"),
+                    "name": project.get("name"),
+                    "href": project.get("_links", {}).get("self", {}).get("href"),
+                }
+
+            if len(name_matches) > 1:
+                return {
+                    "disambiguation_needed": True,
+                    "matches": [
+                        {
+                            "id": p.get("id"),
+                            "identifier": p.get("identifier"),
+                            "name": p.get("name"),
+                            "href": p.get("_links", {}).get("self", {}).get("href"),
+                        }
+                        for p in name_matches
+                    ],
+                }
+
+            # Try partial match on identifier
+            identifier_matches = [
+                p for p in projects if search_term in p.get("identifier", "").lower()
+            ]
+
+            if len(identifier_matches) == 1:
+                project = identifier_matches[0]
+                return {
+                    "id": project.get("id"),
+                    "identifier": project.get("identifier"),
+                    "name": project.get("name"),
+                    "href": project.get("_links", {}).get("self", {}).get("href"),
+                }
+
+            if len(identifier_matches) > 1:
+                return {
+                    "disambiguation_needed": True,
+                    "matches": [
+                        {
+                            "id": p.get("id"),
+                            "identifier": p.get("identifier"),
+                            "name": p.get("name"),
+                            "href": p.get("_links", {}).get("self", {}).get("href"),
+                        }
+                        for p in identifier_matches
+                    ],
+                }
+
+            return {"error": f"No project found matching '{params.name_or_identifier}'"}
+
+        except httpx.HTTPStatusError as e:
+            map_http_error(e.response.status_code, e.response.text[:300])
