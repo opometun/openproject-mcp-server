@@ -2,6 +2,11 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
 
+import httpx
+from openproject_mcp.config import Settings
+from openproject_mcp.client import OpenProjectClient
+from openproject_mcp.errors import map_http_error
+
 # ============================================================================
 # Input Models (Request Parameters)
 # ============================================================================
@@ -115,27 +120,27 @@ class CollectionResponse(BaseModel):
 # ============================================================================
 
 
-def register(server: FastMCP):
+def register(server: FastMCP, settings: Settings | None = None):
     """Register all work package tools with the MCP server"""
+    settings = settings or Settings()
+    client = OpenProjectClient(settings)
 
-    @server.tool(description="Add a comment to a work package")
+    @server.tool("add_comment", description="Add a comment to a work package")
     async def add_comment(params: AddCommentIn) -> dict:
         """
         Add a comment to a work package.
-
-        Args:
-            params: Validated input parameters
-
-        Returns:
-            dict: Standard stub response (not implemented yet)
         """
-        # params is already validated by Pydantic
-        return {
-            "error": {
-                "code": "NotImplemented",
-                "message": "add_comment not implemented yet",
-            }
-        }
+        try:
+            endpoint = f"/work_packages/{params.id}/activities"
+            payload = {"comment": {"raw": params.comment}}
+            res = await client.post(
+                endpoint,
+                params={"notify": "true" if params.notify else "false"},
+                json=payload,
+            )
+            return res.json()
+        except httpx.HTTPStatusError as e:
+            map_http_error(e.response.status_code, e.response.text[:300])
 
     @server.tool(
         description="Search OpenProject content (work packages, projects, attachments)"
