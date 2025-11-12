@@ -1,6 +1,13 @@
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 from typing import Optional, Dict
+import httpx
+import os
+import mimetypes
+
+from openproject_mcp.config import Settings
+from openproject_mcp.client import OpenProjectClient
+from openproject_mcp.errors import map_http_error
 
 # ============================================================================
 # Input Models (Request Parameters)
@@ -75,8 +82,10 @@ class WikiAttachmentCollection(BaseModel):
 # ============================================================================
 
 
-def register(server: FastMCP):
+def register(server: FastMCP, settings: Settings | None = None):
     """Register all wiki tools with the MCP server"""
+    settings = settings or Settings()
+    client = OpenProjectClient(settings)
 
     @server.tool("get_wiki_page", description="Get wiki page details by page ID")
     async def get_wiki_page(params: GetWikiPageIn) -> dict:
@@ -98,13 +107,11 @@ def register(server: FastMCP):
             - Links to project, author, and attachments
             - Parent page reference (if applicable)
         """
-        return {
-            "error": {
-                "code": "NotImplemented",
-                "message": "get_wiki_page not implemented yet",
-                "details": {"page_id": params.page_id},
-            }
-        }
+        try:
+            res = await client.get(f"/wiki_pages/{params.page_id}")
+            return res.json()
+        except httpx.HTTPStatusError as e:
+            map_http_error(e.response.status_code, e.response.text[:300])
 
     @server.tool("attach_file_to_wiki", description="Attach a file to a wiki page")
     async def attach_file_to_wiki(params: AttachFileToWikiIn) -> dict:
@@ -131,17 +138,45 @@ def register(server: FastMCP):
             - Removes Content-Type header to let aiohttp set multipart boundary
             - Description is sent as {"raw": "text"} format
         """
-        return {
-            "error": {
-                "code": "NotImplemented",
-                "message": "attach_file_to_wiki not implemented yet",
-                "details": {
-                    "page_id": params.page_id,
-                    "file_path": params.file_path,
-                    "description": params.description,
-                },
+        try:
+            # Check if file exists
+            if not os.path.exists(params.file_path):
+                raise FileNotFoundError(f"File not found: {params.file_path}")
+
+            # Detect MIME type
+            content_type, _ = mimetypes.guess_type(params.file_path)
+            if not content_type:
+                content_type = "application/octet-stream"
+
+            # Prepare metadata
+            metadata = {"fileName": os.path.basename(params.file_path)}
+
+            if params.description:
+                metadata["description"] = {"raw": params.description}
+
+            # Read file content
+            with open(params.file_path, "rb") as f:
+                file_content = f.read()
+
+            # Upload using multipart/form-data
+            files = {
+                "metadata": (None, str(metadata), "application/json"),
+                "file": (
+                    os.path.basename(params.file_path),
+                    file_content,
+                    content_type,
+                ),
             }
-        }
+
+            res = await client.post(
+                f"/wiki_pages/{params.page_id}/attachments", files=files
+            )
+            return res.json()
+
+        except FileNotFoundError as e:
+            return {"error": str(e)}
+        except httpx.HTTPStatusError as e:
+            map_http_error(e.response.status_code, e.response.text[:300])
 
     @server.tool(
         "list_wiki_page_attachments", description="List all attachments for a wiki page"
@@ -168,10 +203,8 @@ def register(server: FastMCP):
         Raises:
             404: If wiki page doesn't exist or insufficient permissions
         """
-        return {
-            "error": {
-                "code": "NotImplemented",
-                "message": "list_wiki_page_attachments not implemented yet",
-                "details": {"page_id": params.page_id},
-            }
-        }
+        try:
+            res = await client.get(f"/wiki_pages/{params.page_id}/attachments")
+            return res.json()
+        except httpx.HTTPStatusError as e:
+            map_http_error(e.response.status_code, e.response.text[:300])
