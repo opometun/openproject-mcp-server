@@ -8,6 +8,8 @@ Uses respx for HTTP mocking to avoid real API calls.
 import pytest
 import respx
 import httpx
+import json
+from urllib.parse import unquote
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
@@ -316,6 +318,576 @@ class TestAddComment:
         assert route.called
         response_data = json.loads(result[0].text)
         assert len(response_data["comment"]["raw"]) == 5000
+
+
+class TestSearchContent:
+    """Test suite for search_content tool."""
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_work_packages_only(self, server, base_url):
+        """Test searching work packages only."""
+        expected_response = {
+            "_type": "Collection",
+            "count": 2,
+            "total": 2,
+            "_embedded": {
+                "elements": [
+                    {
+                        "id": 1,
+                        "subject": "Test WP 1",
+                        "_links": {"self": {"href": "/api/v3/work_packages/1"}},
+                    },
+                    {
+                        "id": 2,
+                        "subject": "Test WP 2",
+                        "_links": {"self": {"href": "/api/v3/work_packages/2"}},
+                    },
+                ]
+            },
+        }
+
+        route = respx.get(f"{base_url}/work_packages").mock(
+            return_value=httpx.Response(200, json=expected_response)
+        )
+
+        result = await server.call_tool(
+            "search_content",
+            {
+                "params": {
+                    "query": "test",
+                    "scope": "work_packages",
+                    "limit": 100,
+                    "include_attachments": False,
+                }
+            },
+        )
+
+        assert route.called
+        # Verify the request had correct filters
+        assert route.calls.last.request.url.params.get("filters")
+        filters_json = unquote(route.calls.last.request.url.params["filters"])
+        filters = json.loads(filters_json)
+        assert filters[0]["subjectOrId"]["operator"] == "**"
+        assert filters[0]["subjectOrId"]["values"] == ["test"]
+
+        response_data = json.loads(result[0].text)
+        assert response_data["_type"] == "Collection"
+        assert response_data["count"] == 2
+        assert len(response_data["_embedded"]["elements"]) == 2
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_projects_only(self, server, base_url):
+        """Test searching projects only."""
+        expected_response = {
+            "_type": "Collection",
+            "count": 1,
+            "total": 1,
+            "_embedded": {
+                "elements": [
+                    {"id": 1, "identifier": "test-proj", "name": "Test Project"},
+                ]
+            },
+        }
+
+        route = respx.get(f"{base_url}/projects").mock(
+            return_value=httpx.Response(200, json=expected_response)
+        )
+
+        result = await server.call_tool(
+            "search_content",
+            {"params": {"query": "test", "scope": "projects", "limit": 100}},
+        )
+
+        assert route.called
+        # Verify the request had correct filters
+        filters_json = unquote(route.calls.last.request.url.params["filters"])
+        filters = json.loads(filters_json)
+        assert filters[0]["name_and_identifier"]["operator"] == "~"
+        assert filters[0]["name_and_identifier"]["values"] == ["test"]
+
+        response_data = json.loads(result[0].text)
+        assert response_data["count"] == 1
+        assert response_data["_embedded"]["elements"][0]["identifier"] == "test-proj"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_both_scopes(self, server, base_url):
+        """Test searching both work packages and projects."""
+        wp_response = {
+            "_type": "Collection",
+            "count": 2,
+            "total": 2,
+            "_embedded": {
+                "elements": [
+                    {
+                        "id": 1,
+                        "subject": "Test WP 1",
+                        "_links": {"self": {"href": "/api/v3/work_packages/1"}},
+                    },
+                    {
+                        "id": 2,
+                        "subject": "Test WP 2",
+                        "_links": {"self": {"href": "/api/v3/work_packages/2"}},
+                    },
+                ]
+            },
+        }
+
+        proj_response = {
+            "_type": "Collection",
+            "count": 1,
+            "total": 1,
+            "_embedded": {
+                "elements": [
+                    {"id": 1, "identifier": "test-proj", "name": "Test Project"},
+                ]
+            },
+        }
+
+        wp_route = respx.get(f"{base_url}/work_packages").mock(
+            return_value=httpx.Response(200, json=wp_response)
+        )
+
+        proj_route = respx.get(f"{base_url}/projects").mock(
+            return_value=httpx.Response(200, json=proj_response)
+        )
+
+        result = await server.call_tool(
+            "search_content",
+            {"params": {"query": "test", "limit": 100}},  # No scope = both
+        )
+
+        assert wp_route.called
+        assert proj_route.called
+
+        response_data = json.loads(result[0].text)
+        assert "work_packages" in response_data
+        assert "projects" in response_data
+        assert response_data["work_packages"]["count"] == 2
+        assert response_data["projects"]["count"] == 1
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_with_attachments(self, server, base_url):
+        """Test searching work packages with attachment content/filenames."""
+        text_response = {
+            "_type": "Collection",
+            "count": 1,
+            "total": 1,
+            "_embedded": {
+                "elements": [
+                    {
+                        "id": 1,
+                        "subject": "Test WP 1",
+                        "_links": {"self": {"href": "/api/v3/work_packages/1"}},
+                    },
+                ]
+            },
+        }
+
+        attachment_content_response = {
+            "_type": "Collection",
+            "count": 1,
+            "total": 1,
+            "_embedded": {
+                "elements": [
+                    {
+                        "id": 2,
+                        "subject": "WP with attachment",
+                        "_links": {"self": {"href": "/api/v3/work_packages/2"}},
+                    },
+                ]
+            },
+        }
+
+        attachment_name_response = {
+            "_type": "Collection",
+            "count": 1,
+            "total": 1,
+            "_embedded": {
+                "elements": [
+                    {
+                        "id": 3,
+                        "subject": "WP with file",
+                        "_links": {"self": {"href": "/api/v3/work_packages/3"}},
+                    },
+                ]
+            },
+        }
+
+        # Mock all three types of searches
+        def mock_response(request):
+            filters_param = request.url.params.get("filters", "")
+            filters_decoded = unquote(filters_param)
+
+            if "subjectOrId" in filters_decoded:
+                return httpx.Response(200, json=text_response)
+            elif "attachment_content" in filters_decoded:
+                return httpx.Response(200, json=attachment_content_response)
+            elif "attachment_file_name" in filters_decoded:
+                return httpx.Response(200, json=attachment_name_response)
+            else:
+                return httpx.Response(404, json={"message": "Not found"})
+
+        respx.get(f"{base_url}/work_packages").mock(side_effect=mock_response)
+
+        result = await server.call_tool(
+            "search_content",
+            {
+                "params": {
+                    "query": "test",
+                    "scope": "work_packages",
+                    "include_attachments": True,
+                }
+            },
+        )
+
+        response_data = json.loads(result[0].text)
+        # Should merge and deduplicate results from all three queries
+        assert (
+            response_data["count"] == 3
+        )  # 1 from text + 1 from content + 1 from filename
+        assert len(response_data["_embedded"]["elements"]) == 3
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_attachment_deduplication(self, server, base_url):
+        """Test that duplicate WPs from different attachment searches are deduplicated."""
+        text_response = {
+            "_type": "Collection",
+            "count": 1,
+            "total": 1,
+            "_embedded": {
+                "elements": [
+                    {
+                        "id": 1,
+                        "subject": "Test WP",
+                        "_links": {"self": {"href": "/api/v3/work_packages/1"}},
+                    },
+                ]
+            },
+        }
+
+        # Same WP (id=1) returned from attachment search
+        attachment_response = {
+            "_type": "Collection",
+            "count": 1,
+            "total": 1,
+            "_embedded": {
+                "elements": [
+                    {
+                        "id": 1,
+                        "subject": "Test WP",
+                        "_links": {"self": {"href": "/api/v3/work_packages/1"}},
+                    },
+                ]
+            },
+        }
+
+        def mock_response(request):
+            filters_param = request.url.params.get("filters", "")
+            filters_decoded = unquote(filters_param)
+
+            if "subjectOrId" in filters_decoded:
+                return httpx.Response(200, json=text_response)
+            else:
+                # Both attachment filters return the same WP
+                return httpx.Response(200, json=attachment_response)
+
+        respx.get(f"{base_url}/work_packages").mock(side_effect=mock_response)
+
+        result = await server.call_tool(
+            "search_content",
+            {
+                "params": {
+                    "query": "test",
+                    "scope": "work_packages",
+                    "include_attachments": True,
+                }
+            },
+        )
+
+        response_data = json.loads(result[0].text)
+        # Should deduplicate - only 1 WP even though returned from multiple searches
+        assert response_data["count"] == 1
+        assert len(response_data["_embedded"]["elements"]) == 1
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_attachment_unsupported_graceful_fallback(
+        self, server, base_url
+    ):
+        """Test graceful handling when attachment filters are not supported."""
+        text_response = {
+            "_type": "Collection",
+            "count": 1,
+            "total": 1,
+            "_embedded": {
+                "elements": [
+                    {
+                        "id": 1,
+                        "subject": "Test WP",
+                        "_links": {"self": {"href": "/api/v3/work_packages/1"}},
+                    },
+                ]
+            },
+        }
+
+        def mock_response(request):
+            filters_param = request.url.params.get("filters", "")
+            filters_decoded = unquote(filters_param)
+
+            if "subjectOrId" in filters_decoded:
+                return httpx.Response(200, json=text_response)
+            else:
+                # Attachment filters not supported
+                return httpx.Response(400, json={"message": "Filter not supported"})
+
+        respx.get(f"{base_url}/work_packages").mock(side_effect=mock_response)
+
+        result = await server.call_tool(
+            "search_content",
+            {
+                "params": {
+                    "query": "test",
+                    "scope": "work_packages",
+                    "include_attachments": True,
+                }
+            },
+        )
+
+        response_data = json.loads(result[0].text)
+        # Should still return text search results even if attachment search fails
+        assert response_data["count"] == 1
+        assert response_data["_embedded"]["elements"][0]["id"] == 1
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_empty_query(self, server, base_url):
+        """Test search with empty query returns empty collection."""
+        result = await server.call_tool(
+            "search_content",
+            {"params": {"query": "", "scope": "work_packages"}},
+        )
+
+        response_data = json.loads(result[0].text)
+        assert response_data["_type"] == "Collection"
+        assert response_data["count"] == 0
+        assert response_data["total"] == 0
+        assert response_data["_embedded"]["elements"] == []
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_empty_query_both_scopes(self, server, base_url):
+        """Test search with empty query and no scope returns empty collections."""
+        result = await server.call_tool(
+            "search_content",
+            {"params": {"query": "   "}},  # Whitespace only
+        )
+
+        response_data = json.loads(result[0].text)
+        assert "work_packages" in response_data
+        assert "projects" in response_data
+        assert response_data["work_packages"]["count"] == 0
+        assert response_data["projects"]["count"] == 0
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_no_results(self, server, base_url):
+        """Test search that returns no results."""
+        empty_response = {
+            "_type": "Collection",
+            "count": 0,
+            "total": 0,
+            "_embedded": {"elements": []},
+        }
+
+        respx.get(f"{base_url}/work_packages").mock(
+            return_value=httpx.Response(200, json=empty_response)
+        )
+
+        result = await server.call_tool(
+            "search_content",
+            {"params": {"query": "nonexistent", "scope": "work_packages"}},
+        )
+
+        response_data = json.loads(result[0].text)
+        assert response_data["count"] == 0
+        assert len(response_data["_embedded"]["elements"]) == 0
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_custom_limit(self, server, base_url):
+        """Test search with custom result limit."""
+        expected_response = {
+            "_type": "Collection",
+            "count": 5,
+            "total": 5,
+            "_embedded": {
+                "elements": [{"id": i, "subject": f"WP {i}"} for i in range(1, 6)]
+            },
+        }
+
+        route = respx.get(f"{base_url}/work_packages").mock(
+            return_value=httpx.Response(200, json=expected_response)
+        )
+
+        result = await server.call_tool(
+            "search_content",
+            {"params": {"query": "test", "scope": "work_packages", "limit": 5}},
+        )
+
+        assert route.called
+        # Verify pageSize parameter
+        assert route.calls.last.request.url.params.get("pageSize") == "5"
+
+        response_data = json.loads(result[0].text)
+        assert response_data["count"] == 5
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_url_encoding(self, server, base_url):
+        """Test that special characters in query are properly URL encoded."""
+        expected_response = {
+            "_type": "Collection",
+            "count": 0,
+            "total": 0,
+            "_embedded": {"elements": []},
+        }
+
+        route = respx.get(f"{base_url}/work_packages").mock(
+            return_value=httpx.Response(200, json=expected_response)
+        )
+
+        special_query = "test & value = foo"
+        await server.call_tool(
+            "search_content",
+            {"params": {"query": special_query, "scope": "work_packages"}},
+        )
+
+        assert route.called
+        # Verify the filter contains the special characters
+        filters_json = unquote(route.calls.last.request.url.params["filters"])
+        filters = json.loads(filters_json)
+        assert filters[0]["subjectOrId"]["values"][0] == special_query
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_project_sort_by_typeahead(self, server, base_url):
+        """Test that project search uses typeahead sorting."""
+        expected_response = {
+            "_type": "Collection",
+            "count": 1,
+            "total": 1,
+            "_embedded": {
+                "elements": [{"id": 1, "identifier": "test", "name": "Test"}]
+            },
+        }
+
+        route = respx.get(f"{base_url}/projects").mock(
+            return_value=httpx.Response(200, json=expected_response)
+        )
+
+        await server.call_tool(
+            "search_content",
+            {"params": {"query": "test", "scope": "projects"}},
+        )
+
+        assert route.called
+        # Verify sortBy parameter
+        sortby_json = unquote(route.calls.last.request.url.params["sortBy"])
+        sortby = json.loads(sortby_json)
+        assert sortby == [["typeahead", "asc"]]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_select_fields(self, server, base_url):
+        """Test that search requests include proper field selection."""
+        expected_response = {
+            "_type": "Collection",
+            "count": 0,
+            "total": 0,
+            "_embedded": {"elements": []},
+        }
+
+        route = respx.get(f"{base_url}/work_packages").mock(
+            return_value=httpx.Response(200, json=expected_response)
+        )
+
+        await server.call_tool(
+            "search_content",
+            {"params": {"query": "test", "scope": "work_packages"}},
+        )
+
+        assert route.called
+        # Verify select parameter includes required fields
+        select_param = route.calls.last.request.url.params.get("select")
+        assert "total" in select_param
+        assert "elements/id" in select_param
+        assert "elements/subject" in select_param
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_concurrent_execution(self, server, base_url):
+        """Test that searching both scopes executes concurrently."""
+        import time
+
+        call_times = []
+
+        def track_call(response):
+            call_times.append(time.time())
+            return response
+
+        wp_response = {
+            "_type": "Collection",
+            "count": 1,
+            "total": 1,
+            "_embedded": {"elements": [{"id": 1, "subject": "WP"}]},
+        }
+
+        proj_response = {
+            "_type": "Collection",
+            "count": 1,
+            "total": 1,
+            "_embedded": {"elements": [{"id": 1, "name": "Proj"}]},
+        }
+
+        respx.get(f"{base_url}/work_packages").mock(
+            side_effect=lambda req: track_call(httpx.Response(200, json=wp_response))
+        )
+
+        respx.get(f"{base_url}/projects").mock(
+            side_effect=lambda req: track_call(httpx.Response(200, json=proj_response))
+        )
+
+        await server.call_tool(
+            "search_content",
+            {"params": {"query": "test"}},  # No scope = both, should be concurrent
+        )
+
+        # Both endpoints should be called
+        assert len(call_times) == 2
+        # Calls should be close together (concurrent, not sequential)
+        # Allow 100ms tolerance for test execution overhead
+        assert abs(call_times[1] - call_times[0]) < 0.1
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_search_unauthorized(self, server, base_url):
+        """Test error handling for unauthorized access."""
+        respx.get(f"{base_url}/work_packages").mock(
+            return_value=httpx.Response(401, json={"message": "Unauthorized"})
+        )
+
+        with pytest.raises(ToolError) as exc_info:
+            await server.call_tool(
+                "search_content",
+                {"params": {"query": "test", "scope": "work_packages"}},
+            )
+
+        assert "Authentication failed" in str(exc_info.value)
 
 
 # ============================================================================

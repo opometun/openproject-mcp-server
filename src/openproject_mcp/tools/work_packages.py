@@ -2,6 +2,9 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
 
+import asyncio
+import json
+from urllib.parse import quote
 import httpx
 from openproject_mcp.config import Settings
 from openproject_mcp.client import OpenProjectClient
@@ -23,7 +26,7 @@ class AddCommentIn(BaseModel):
 class SearchContentIn(BaseModel):
     """Input parameters for searching OpenProject content"""
 
-    query: str = Field(..., description="Search query text", min_length=1)
+    query: str = Field(..., description="Search query text")
     scope: Optional[Literal["work_packages", "projects"]] = Field(
         None, description="Search scope: 'work_packages', 'projects', or None for both"
     )
@@ -150,37 +153,161 @@ def register(server: FastMCP, settings: Settings | None = None):
         """
         Search across work packages, projects, and optionally attachments.
 
-        Args:
-            params: Validated search parameters
+        When scope is:
+        - 'work_packages': returns a standard Collection with _embedded.elements
+        - 'projects':      returns a standard Collection with _embedded.elements
+        - None:            returns {"work_packages": <Collection>, "projects": <Collection>}
 
-        Returns:
-            dict: Collection(s) of search results
+        Notes:
+        - Uses the safer '~' operator for text search where appropriate.
+        - If include_attachments=True, runs additional attachment-based queries
+          and merges results (de-duplicated by WP id).
         """
         try:
-            filters = []
-
-            # Scope filter
-            if params.scope == "work_packages":
-                filters.append(
-                    {"scope": {"operator": "=", "values": ["work_packages"]}}
+            term = (params.query or "").strip()
+            if not term:
+                empty = {
+                    "_type": "Collection",
+                    "count": 0,
+                    "total": 0,
+                    "_embedded": {"elements": []},
+                }
+                return (
+                    empty
+                    if params.scope in {"work_packages", "projects"}
+                    else {"work_packages": empty, "projects": empty}
                 )
-            elif params.scope == "projects":
-                filters.append({"scope": {"operator": "=", "values": ["projects"]}})
 
-            # Include attachments if requested
-            if params.include_attachments:
-                filters.append({"attachments": {"operator": "=", "values": ["1"]}})
+            def ensure_collection(obj: dict) -> dict:
+                obj.setdefault("_embedded", {}).setdefault("elements", [])
+                if "count" not in obj:
+                    obj["count"] = len(obj["_embedded"]["elements"])
+                if "total" not in obj:
+                    obj["total"] = obj["count"]
+                if "_type" not in obj:
+                    obj["_type"] = "Collection"
+                return obj
 
-            payload = {
-                "q": params.query,
-                "pageSize": params.limit,
+            async def fetch_work_packages_text() -> dict:
+                # Generic text search across WPs (subject/description/comments etc.)
+                wp_filters = [{"subjectOrId": {"operator": "**", "values": [term]}}]
+                qs = (
+                    f"filters={quote(json.dumps(wp_filters), safe='')}"
+                    f"&pageSize={params.limit}"
+                    f"&select=total,elements/id,elements/subject,elements/_links/self,self"
+                )
+                res = await client.get(f"/work_packages?{qs}")
+                return res.json()
+
+            async def fetch_work_packages_attachments() -> dict:
+                """
+                Try attachment searches. Some instances may not support these filters;
+                we catch errors and fall back to an empty collection in that case.
+                We query content and filename separately and merge results (OR semantics).
+                """
+
+                # Helper to run a single attachment filter safely
+                async def run_att_filter(filter_id: str) -> dict:
+                    try:
+                        att_filters = [{filter_id: {"operator": "~", "values": [term]}}]
+                        qs = (
+                            f"filters={quote(json.dumps(att_filters), safe='')}"
+                            f"&pageSize={params.limit}"
+                            f"&select=total,elements/id,elements/subject,"
+                            f"elements/_links/self,self"
+                        )
+                        res = await client.get(f"/work_packages?{qs}")
+                        return res.json()
+                    except Exception:
+                        # Unsupported filter on this instance
+                        return {
+                            "_type": "Collection",
+                            "count": 0,
+                            "total": 0,
+                            "_embedded": {"elements": []},
+                        }
+
+                # Run both (content + filename) and merge de-duplicated by id
+                content_res, name_res = await asyncio.gather(
+                    run_att_filter("attachment_content"),
+                    run_att_filter("attachment_file_name"),
+                )
+                content_res = ensure_collection(content_res)
+                name_res = ensure_collection(name_res)
+
+                seen = set()
+                merged = []
+                for src in (
+                    content_res["_embedded"]["elements"],
+                    name_res["_embedded"]["elements"],
+                ):
+                    for el in src:
+                        el_id = el.get("id")
+                        if el_id is None or el_id in seen:
+                            continue
+                        seen.add(el_id)
+                        merged.append(el)
+
+                return {
+                    "_type": "Collection",
+                    "count": len(merged),
+                    "total": len(merged),
+                    "_embedded": {"elements": merged},
+                }
+
+            async def get_wps() -> dict:
+                # Always include generic text search
+                base = ensure_collection(await fetch_work_packages_text())
+
+                if not params.include_attachments:
+                    return base
+
+                # Try attachment queries and merge with base (de-dupe)
+                att = ensure_collection(await fetch_work_packages_attachments())
+                if att["count"] == 0:
+                    return base
+
+                seen = {el.get("id") for el in base["_embedded"]["elements"]}
+                merged = list(base["_embedded"]["elements"])
+                for el in att["_embedded"]["elements"]:
+                    el_id = el.get("id")
+                    if el_id is None or el_id in seen:
+                        continue
+                    seen.add(el_id)
+                    merged.append(el)
+
+                return {
+                    "_type": "Collection",
+                    "count": len(merged),
+                    "total": len(merged),
+                    "_embedded": {"elements": merged},
+                }
+
+            async def get_projects() -> dict:
+                proj_filters = [
+                    {"name_and_identifier": {"operator": "~", "values": [term]}}
+                ]
+                qs = (
+                    f"filters={quote(json.dumps(proj_filters), safe='')}"
+                    f"&pageSize={params.limit}"
+                    f"&select=total,elements/id,elements/identifier,elements/name,self"
+                    f"&sortBy={quote(json.dumps([['typeahead','asc']]), safe='')}"
+                )
+                res = await client.get(f"/projects?{qs}")
+                return res.json()
+
+            if params.scope == "work_packages":
+                return ensure_collection(await get_wps())
+            if params.scope == "projects":
+                return ensure_collection(await get_projects())
+
+            # Both
+            wps, projs = await asyncio.gather(get_wps(), get_projects())
+            return {
+                "work_packages": ensure_collection(wps),
+                "projects": ensure_collection(projs),
             }
 
-            if filters:
-                payload["filters"] = filters
-
-            res = await client.post("/queries/default", json=payload)
-            return res.json()
         except httpx.HTTPStatusError as e:
             map_http_error(e.response.status_code, e.response.text[:300])
 
