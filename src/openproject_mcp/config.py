@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, AnyHttpUrl
+import os
 
 
 class Settings(BaseSettings):
@@ -14,16 +15,16 @@ class Settings(BaseSettings):
 
     # Will read from OPENPROJECT_URL or OPENPROJECT_BASE_URL
     url: AnyHttpUrl = Field(
-        ...,
+        default_factory=lambda: os.getenv("OPENPROJECT_URL")
+        or os.getenv("OPENPROJECT_BASE_URL"),
         description="OpenProject instance URL (e.g. https://openproject.example.com)",
-        validation_alias="OPENPROJECT_URL",
     )
 
     # Will read from OPENPROJECT_API_KEY or OPENPROJECT_API_TOKEN
     api_key: str = Field(
-        ...,
+        default_factory=lambda: os.getenv("OPENPROJECT_API_KEY")
+        or os.getenv("OPENPROJECT_API_TOKEN"),
         description="API key with API v3 access",
-        validation_alias="OPENPROJECT_API_KEY",
     )
 
     connect_timeout: float = Field(
